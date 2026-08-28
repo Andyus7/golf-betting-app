@@ -12,8 +12,9 @@ import {
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
 import { COLORS, RADIUS, SHADOWS, SPACING } from '../theme/theme';
 import { MOCK_PLAYERS, HOLES_DATA, MOCK_ACTIVE_ROUND } from '../data/mockData';
+import { addHistoryRound } from '../data/roundStore';
 
-export default function ScorecardScreen() {
+export default function ScorecardScreen({ navigation }) {
   // Navigation tab between live scorecard and round configuration
   const [activeTab, setActiveTab] = useState('scorecard'); // 'scorecard' | 'config'
 
@@ -144,6 +145,7 @@ export default function ScorecardScreen() {
     let grossTotal = 0;
     let netTotal = 0;
     let parTotal = 0;
+    let parPlayed = 0;
     let holesPlayed = 0;
 
     holesList.forEach((h) => {
@@ -152,11 +154,12 @@ export default function ScorecardScreen() {
       if (g && g > 0) {
         grossTotal += g;
         netTotal += getNetScore(g, h.hcp, playerId);
+        parPlayed += h.par;
         holesPlayed += 1;
       }
     });
 
-    return { grossTotal, netTotal, parTotal, holesPlayed };
+    return { grossTotal, netTotal, parTotal, parPlayed, holesPlayed };
   };
 
   // Total par for full course
@@ -228,6 +231,174 @@ export default function ScorecardScreen() {
       });
     });
     setScores(demo);
+  };
+
+  const handleFinalizeAndLiquidateRound = () => {
+    // Calculate player stats
+    const playerResults = players.map((p) => {
+      const totals = calculateTotals(p.id, 'all');
+      const targetPar = totals.parPlayed > 0 ? totals.parPlayed : totalPar;
+      const grossDiffNum = totals.grossTotal - targetPar;
+      const netDiffNum = totals.netTotal - targetPar;
+      return {
+        ...p,
+        grossTotal: totals.grossTotal,
+        netTotal: totals.netTotal,
+        grossDiff: grossDiffNum === 0 ? 'E' : grossDiffNum > 0 ? `+${grossDiffNum}` : `${grossDiffNum}`,
+        netDiff: netDiffNum === 0 ? 'E' : netDiffNum > 0 ? `+${netDiffNum}` : `${netDiffNum}`,
+      };
+    });
+
+    const hasScores = playerResults.some((p) => p.grossTotal > 0);
+    if (!hasScores) {
+      Alert.alert(
+        'Sin Golpes Registrados',
+        'Ingresa los golpes de los jugadores o presiona "Cargar Score de Ejemplo" antes de finalizar la ronda.'
+      );
+      return;
+    }
+
+    const sortedByNet = [...playerResults].sort((a, b) => a.netTotal - b.netTotal);
+    const winner = sortedByNet[0];
+
+    // Compute bets breakdown
+    let totalPot = 0;
+    const balancesMap = {};
+    const wagersSummary = [];
+
+    if (format === '1vs1' && playerResults.length >= 2) {
+      const p1 = playerResults[0];
+      const p2 = playerResults[1];
+
+      const p1Out = calculateTotals(p1.id, 'out').netTotal;
+      const p2Out = calculateTotals(p2.id, 'out').netTotal;
+      const p1In = calculateTotals(p1.id, 'in').netTotal;
+      const p2In = calculateTotals(p2.id, 'in').netTotal;
+
+      let p1Bal = 0;
+      let p2Bal = 0;
+
+      // Nassau Ida ($300 MXN)
+      if (p1Out < p2Out) {
+        p1Bal += 300; p2Bal -= 300;
+        wagersSummary.push({ wager: 'Nassau - Ida (1-9)', winner: p1.shortName, amount: '$300 MXN' });
+      } else if (p2Out < p1Out) {
+        p2Bal += 300; p1Bal -= 300;
+        wagersSummary.push({ wager: 'Nassau - Ida (1-9)', winner: p2.shortName, amount: '$300 MXN' });
+      } else {
+        wagersSummary.push({ wager: 'Nassau - Ida (1-9)', winner: 'Empate', amount: '$0 MXN' });
+      }
+
+      // Nassau Vuelta ($300 MXN)
+      if (p1In < p2In) {
+        p1Bal += 300; p2Bal -= 300;
+        wagersSummary.push({ wager: 'Nassau - Vuelta (10-18)', winner: p1.shortName, amount: '$300 MXN' });
+      } else if (p2In < p1In) {
+        p2Bal += 300; p1Bal -= 300;
+        wagersSummary.push({ wager: 'Nassau - Vuelta (10-18)', winner: p2.shortName, amount: '$300 MXN' });
+      } else {
+        wagersSummary.push({ wager: 'Nassau - Vuelta (10-18)', winner: 'Empate', amount: '$0 MXN' });
+      }
+
+      // Nassau Total ($400 MXN)
+      if (p1.netTotal < p2.netTotal) {
+        p1Bal += 400; p2Bal -= 400;
+        wagersSummary.push({ wager: 'Nassau - Total 18 Hoyos', winner: `${p1.shortName} (${p1.netTotal} neto)`, amount: '$400 MXN' });
+      } else if (p2.netTotal < p1.netTotal) {
+        p2Bal += 400; p1Bal -= 400;
+        wagersSummary.push({ wager: 'Nassau - Total 18 Hoyos', winner: `${p2.shortName} (${p2.netTotal} neto)`, amount: '$400 MXN' });
+      } else {
+        wagersSummary.push({ wager: 'Nassau - Total 18 Hoyos', winner: 'Empate', amount: '$0 MXN' });
+      }
+
+      // Differential Medal
+      const diffStrokes = Math.abs(p1.netTotal - p2.netTotal);
+      const diffPayout = diffStrokes * 100;
+      if (p1.netTotal < p2.netTotal) {
+        p1Bal += diffPayout; p2Bal -= diffPayout;
+        wagersSummary.push({ wager: `Diferencial Medal (${diffStrokes} golpes)`, winner: p1.shortName, amount: `$${diffPayout} MXN` });
+      } else if (p2.netTotal < p1.netTotal) {
+        p2Bal += diffPayout; p1Bal -= diffPayout;
+        wagersSummary.push({ wager: `Diferencial Medal (${diffStrokes} golpes)`, winner: p2.shortName, amount: `$${diffPayout} MXN` });
+      }
+
+      balancesMap[p1.id] = p1Bal;
+      balancesMap[p2.id] = p2Bal;
+      totalPot = Math.abs(p1Bal) + Math.abs(p2Bal);
+    } else {
+      // Group (2-4 players)
+      const avgNet = playerResults.reduce((acc, curr) => acc + curr.netTotal, 0) / playerResults.length;
+      playerResults.forEach((p) => {
+        const diffFromAvg = Math.round((avgNet - p.netTotal) * 200);
+        balancesMap[p.id] = diffFromAvg;
+        totalPot += Math.abs(diffFromAvg);
+      });
+      wagersSummary.push({
+        wager: 'Modalidad Grupal (Medal Play)',
+        winner: winner.shortName,
+        amount: `$${Math.abs(balancesMap[winner.id] || 0)} MXN`,
+      });
+    }
+
+    const now = new Date();
+    const dateStr = `${now.getDate()} de Agosto, ${now.getFullYear()} • ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+    const newRound = {
+      id: `round_${Date.now()}`,
+      date: dateStr,
+      courseName: courseConfig.name,
+      parTotal: totalPar,
+      slopeRating: courseConfig.slope,
+      courseRating: courseConfig.rating,
+      format,
+      formatLabel: format === '1vs1' ? 'Duelo 1vs1 (Match Play)' : `Grupo (${players.length} Jugadores)`,
+      handicapMode,
+      totalHoles: 18,
+      winnerName: winner.name,
+      winnerAvatar: winner.avatar,
+      totalPot,
+      weather: '☀️ Soleado 23°C',
+      summaryText: `Ronda finalizada. ${winner.shortName} ganó con score neto de ${winner.netTotal} (${winner.netDiff}).`,
+      balances: playerResults.map((p) => ({
+        name: p.shortName,
+        balance: balancesMap[p.id] || 0,
+        isWinner: p.id === winner.id,
+        grossTotal: p.grossTotal,
+        netTotal: p.netTotal,
+        grossDiff: p.grossDiff,
+        netDiff: p.netDiff,
+      })),
+      wagersSummary,
+      players: playerResults.map((p) => ({
+        ...p,
+        balance: balancesMap[p.id] || 0,
+        isWinner: p.id === winner.id,
+      })),
+      holes: courseConfig.holes.map((h) => ({
+        hole: h.hole,
+        par: h.par,
+        hcp: h.hcp,
+        scores: { ...(scores[h.hole] || {}) },
+      })),
+    };
+
+    addHistoryRound(newRound);
+
+    Alert.alert(
+      '🏆 Ronda Liquidada',
+      `¡La partida ha sido finalizada con éxito! ${winner.shortName} es el ganador. Se ha guardado en el Historial.`,
+      [
+        { text: 'Permanecer aquí', style: 'cancel' },
+        {
+          text: 'Ver en Historial 📜',
+          onPress: () => {
+            if (navigation) {
+              navigation.navigate('Historial');
+            }
+          },
+        },
+      ]
+    );
   };
 
   // ----------------------------------------------------
@@ -748,8 +919,9 @@ export default function ScorecardScreen() {
             >
               {players.map((p) => {
                 const totals = calculateTotals(p.id, 'all');
-                const grossDiff = totals.grossTotal - totals.parTotal;
-                const netDiff = totals.netTotal - totals.parTotal;
+                const targetPar = totals.parPlayed > 0 ? totals.parPlayed : totalPar;
+                const grossDiff = totals.grossTotal - targetPar;
+                const netDiff = totals.netTotal - targetPar;
 
                 return (
                   <View
@@ -1066,6 +1238,26 @@ export default function ScorecardScreen() {
                 </View>
               </View>
             </View>
+
+            {/* Finalize and Liquidate Round CTA */}
+            <TouchableOpacity
+              style={styles.finalizeRoundBtn}
+              activeOpacity={0.85}
+              onPress={handleFinalizeAndLiquidateRound}
+            >
+              <View style={styles.finalizeBtnContent}>
+                <View style={styles.finalizeTrophyCircle}>
+                  <Ionicons name="trophy" size={22} color={COLORS.accentGold} />
+                </View>
+                <View style={styles.finalizeTextCol}>
+                  <Text style={styles.finalizeBtnTitle}>Finalizar y Liquidar Ronda</Text>
+                  <Text style={styles.finalizeBtnSub}>
+                    Liquida apuestas, calcula saldos finales y guarda en Historial
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color={COLORS.accentGold} />
+              </View>
+            </TouchableOpacity>
           </>
         )}
 
@@ -2332,6 +2524,43 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
     marginRight: 8,
+  },
+  finalizeRoundBtn: {
+    backgroundColor: COLORS.bgCard,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.md,
+    marginTop: SPACING.md,
+    borderWidth: 1.5,
+    borderColor: COLORS.accentGold,
+    ...SHADOWS.medium,
+  },
+  finalizeBtnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  finalizeTrophyCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: SPACING.sm,
+    borderWidth: 1,
+    borderColor: COLORS.accentGold,
+  },
+  finalizeTextCol: {
+    flex: 1,
+  },
+  finalizeBtnTitle: {
+    color: COLORS.accentGold,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  finalizeBtnSub: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    marginTop: 2,
   },
 });
 
