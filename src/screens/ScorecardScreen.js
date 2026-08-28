@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,13 @@ import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-ico
 import { COLORS, RADIUS, SHADOWS, SPACING } from '../theme/theme';
 import { MOCK_PLAYERS, HOLES_DATA, MOCK_ACTIVE_ROUND } from '../data/mockData';
 import { addHistoryRound } from '../data/roundStore';
+import {
+  setPlayers as setPlayersStore,
+  setFormat as setFormatStore,
+  setCourseConfig as setCourseConfigStore,
+  setCurrentHole as setCurrentHoleStore,
+  setScoresStore,
+} from '../data/activeRoundStore';
 
 export default function ScorecardScreen({ navigation }) {
   // Navigation tab between live scorecard and round configuration
@@ -66,6 +73,27 @@ export default function ScorecardScreen({ navigation }) {
   const [viewMode, setViewMode] = useState('all'); // 'all', 'out', 'in'
   const [scoreType, setScoreType] = useState('gross'); // 'gross', 'net'
   const [configHoleTab, setConfigHoleTab] = useState('out'); // 'out' (1-9) | 'in' (10-18) in config screen
+
+  // Sync active round state with shared activeRoundStore
+  useEffect(() => {
+    setPlayersStore(players);
+  }, [players]);
+
+  useEffect(() => {
+    setFormatStore(format);
+  }, [format]);
+
+  useEffect(() => {
+    setCourseConfigStore(courseConfig);
+  }, [courseConfig]);
+
+  useEffect(() => {
+    setCurrentHoleStore(currentHole);
+  }, [currentHole]);
+
+  useEffect(() => {
+    setScoresStore(scores);
+  }, [scores]);
 
   // ----------------------------------------------------
   // HANDICAP & ADVANTAGE STROKES CALCULATIONS
